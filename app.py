@@ -1,9 +1,11 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import joblib
+import os
 
 # ==========================================
-# 1. Хуудасны тохиргоо ба CSS
+# 1. Хуудасны тохиргоо ба CSS (Sky Blue Theme + Sliding Animations)
 # ==========================================
 st.set_page_config(
     page_title="Pasture Degradation Risk Prediction",
@@ -11,37 +13,73 @@ st.set_page_config(
     layout="wide"
 )
 
-# Light theme (2 дахь зураг дээрх шиг зөөлөн ногоон туяатай) ба Dialog Styling
+# Sky Blue Арын фон болон CSS Анимаци
 st.markdown("""
     <style>
-        /* Ерөнхий арын өнгө болон текст (Light Mode) */
+        /* Ерөнхий арын өнгө болон туслах фон (Sky Blue Theme) */
         .main, .stApp { 
-            background-color: #E8F5E9 !important; 
+            background-color: #F0F9FF !important; 
         }
         [data-testid="stSidebar"] {
-            background-color: #D7ECD9 !important;
+            background-color: #E0F2FE !important;
         }
         h1, h2, h3, h4, h5, h6, p, label, .stMarkdown { 
-            color: #1B5E20 !important; 
+            color: #0C4A6E !important; 
         }
-        
+
+        /* 1. Баруун талаас зөөлөн орж ирэх анимаци (COP-17 / Гарчиг хэсэгт) */
+        @keyframes slideInRight {
+            0% {
+                opacity: 0;
+                transform: translateX(80px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* 2. Зүүн талаас зөөлөн орж ирэх анимаци (Зорилго хэсэгт) */
+        @keyframes slideInLeft {
+            0% {
+                opacity: 0;
+                transform: translateX(-80px);
+            }
+            100% {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* Анимацийн ангиуд */
+        .slide-right {
+            animation: slideInRight 1.0s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+        }
+
+        .slide-left {
+            animation: slideInLeft 1.0s cubic-bezier(0.25, 1, 0.5, 1) forwards;
+        }
+
         /* Navigation Header style */
         .nav-brand {
             font-size: 24px;
             font-weight: 800;
-            color: #2E7D32 !important;
+            color: #0284C7 !important;
             display: flex;
             align-items: center;
             gap: 10px;
         }
 
         /* Modal (Dialog) доторх гарчгийг Sky Blue болгож, бусад текстийг тод харагдуулах */
+        div[role="dialog"] {
+            background-color: #F0F9FF !important;
+        }
         div[role="dialog"] h2, div[role="dialog"] h3 {
-            color: #0284C7 !important; /* Sky Blue өнгө */
+            color: #0284C7 !important;
             font-weight: 800 !important;
         }
         div[role="dialog"] p, div[role="dialog"] li, div[role="dialog"] div {
-            color: #0F172A !important; /* Тод харагдах хар өнгө */
+            color: #0F172A !important;
         }
     </style>
 """, unsafe_allow_html=True)
@@ -59,8 +97,11 @@ translations = {
         "lbl_pasture": "Бэлчээрийн талбай (мянга га):",
         "lbl_count": "Малын тоо (мянга тоо толгой):",
         "lbl_loss": "Зүй бус хорогдол (мянга толгой):",
-        "main_title": "Pasture Degradation Risk Prediction System",
-        "main_subtitle": "Machine Learning Dashboard based on climate and livestock parameters.",
+        "upload_label": "📁 Файлаар өгөгдөл оруулах (CSV/XLSX):",
+        "export_btn": "📥 Таамаглалын тайлан татах",
+        "main_title": "Бэлчээрийн Доройтлын Эрсдэлийг Таамаглах Систем",
+        "main_subtitle": "Уур амьсгал болон мал сүргийн үзүүлэлтэд суурилсан хиймэл интеллектийн хянах багц.",
+        "ai_result_title": "AI Таамаглалын Дүн",
         "nav_about": "🌿 COP-17 & Зорилго",
         "cop_modal_title": "COP-17 Ulaanbaatar 2026 & Вэбсайтын Зорилго",
         "cop_sub": "НҮБ-ын Цөлжилттэй тэмцэх конвенцийн Талуудын 17-р бага хурал",
@@ -77,10 +118,10 @@ translations = {
         "unit_thousand": "мян.тол",
         "risk_level_label": "ЭРСДЭЛИЙН ТҮВШИН:",
         "prob_title": "ЭРСДЭЛИЙН МАГАДЛАЛЫН ХУВААРИЛАЛТ",
-        "radar_title": "Parameter Proportions & Radar Chart",
-        "radar_subtitle": "Normalized values of input features",
-        "feature_title": "Feature Importance",
-        "feature_subtitle": "Which features influence the AI model the most?",
+        "radar_title": "Үзүүлэлтүүдийн Харьцаа ба Радар График",
+        "radar_subtitle": "Оруулсан үзүүлэлтүүдийн стандартчилсан утга",
+        "feature_title": "Үзүүлэлтүүдийн Нөлөөлөл (Feature Importance)",
+        "feature_subtitle": "Ямар үзүүлэлтүүд AI загварын таамаглалд хамгийн их нөлөөлж байна вэ?",
         "categories": ['Малын тоо', 'Хур тунадас', 'Температура', 'Зүй бус хорогдол', 'Малын нягтрал'],
         "feature_labels": {
             "livestock_density": "Малын нягтрал",
@@ -90,31 +131,31 @@ translations = {
             "temperature": "Температура",
             "pasture_area": "Бэлчээрийн талбай"
         },
-        "summary_title_high": "🚨 ӨНДӨР ЭРСДЭЛИЙН НЭГДСЭН ДҮГНЭЛТ",
-        "summary_desc_high": "Үзүүлэлтүүд аюултай түвшинд хүрсэн тул яаралтай зохицуулалт шаардлагатай.",
-        "summary_title_med": "⚠️ ДУНД ТҮВШНИЙ ЭРСДЭЛИЙН НЭГДСЭН ДҮГНЭЛТ",
-        "summary_desc_med": "Нийт нөхцөл байдал харьцангуй хэвийн боловч зарим хүчин зүйл дээр анхаарах шаардлагатай.",
-        "summary_title_low": "✅ ТОГТВОРТОЙ НӨХЦӨЛ БАЙДЛЫН ДҮГНЭЛТ (БАГА ЭРСДЭЛ)",
-        "summary_desc_low": "Бэлчээрийн даац болон уур амьсгалын үзүүлэлтүүд маш сайн тэнцвэртэй байна.",
-        "analysis_header": "Гол хүчин зүйлс болон дүн шинжилгээ:",
+        "summary_title_high": "🚨 ЭРСДЭЛ ӨНДӨР НӨХЦӨЛ БАЙДЛЫН ДҮГНЭЛТ",
+        "summary_desc_high": "Олон тооны үзүүлэлтүүд аюултай түвшинд хүрсэн байна. Яаралтай зохицуулалт болон арга хэмжээ авахыг зөвлөж байна.",
+        "summary_title_med": "⚠️ ДУНД ЭРСДЭЛТЭЙ НӨХЦӨЛ БАЙДЛЫН ДҮГНЭЛТ",
+        "summary_desc_med": "Ерөнхий нөхцөл байдал харьцангуй тогтвортой боловч тодорхой үзүүлэлтүүдийг анхааралтай ажиглах шаардлагатай.",
+        "summary_title_low": "✅ ТОГТВОРТОЙ НӨХЦӨЛ БАЙДАЛ (БАГА ЭРСДЭЛ)",
+        "summary_desc_low": "Бэлчээрийн даац болон цаг уурын нөхцөл байдал сайн зохицож, зохистой түвшинд байна.",
+        "analysis_header": "Гол нөлөөлөх хүчин зүйлс ба дэлгэрэнгүй шинжилгээ:",
         "reasons": {
-            "precip_low": "🌧️ <b>Хур тунадасны дутагдал:</b> Жилийн тунадас <b>{val:.1f} мм</b> байгаа нь ургацад сөрөг нөлөөтэй.",
-            "precip_ok": "🌧️ <b>Хур тунадас хангамжтай:</b> Жилийн тунадас <b>{val:.1f} мм</b> байгаа нь чийгшлийн хэвийн нөхцөлийг бүрдүүлж байна.",
-            "temp_high": "🌡️ <b>Агаарын халалт:</b> Температур <b>{val:.1f}°C</b> хүрч, гангаралт үүсгэж байна.",
-            "temp_low": "❄️ <b>Хэт хүйтрэл:</b> Агаарын температур <b>{val:.1f}°C</b> байгаа нь зудын аюулыг өсгөж байна.",
-            "temp_ok": "🌡️ <b>Агаарын дулаан дундаж:</b> Температур <b>{val:.1f}°C</b> байгаа нь уур амьсгалын хэвийн мужид байна.",
-            "density_high": "🐄 <b>Бэлчээрийн ачаалал хэтэрсэн:</b> Нягтрал <b>{val:.2f} толгой/га</b> байгаа нь бэлчээрт ачаалал үүсгэж байна.",
-            "density_ok": "🌱 <b>Бэлчээрийн даац боломжийн:</b> Нягтрал <b>{val:.2f} толгой/га</b> байгаа нь ачаалал багатай.",
-            "loss_high": "⚠️ <b>Хорогдол өндөр:</b> Зүй бус хорогдол <b>{val:.0f} мянган толгой</b> байна."
+            "precip_low": "🌧️ <b>Бага хур тунадас:</b> Жилийн хур тунадас <b>{val:.1f} мм</b> байгаа нь ургамлын ургалтад сөрөг нөлөө үзүүлж байна.",
+            "precip_ok": "🌧️ <b>Хангалттай хур тунадас:</b> Жилийн хур тунадас <b>{val:.1f} мм</b> байгаа нь хөрсний чийгийг дэмжиж байна.",
+            "temp_high": "🌡️ <b>Өндөр температура:</b> Агаарын температура <b>{val:.1f}°C</b> хүрч байгаа нь гандрах эрсдэлийг нэмэгдүүлнэ.",
+            "temp_low": "❄️ <b>Хэт хүйтэн:</b> Агаарын температура <b>{val:.1f}°C</b> байгаа нь зуд болон бусад эрсдэлийг нэмэгдүүлнэ.",
+            "temp_ok": "🌡️ <b>Зохистой температура:</b> Дундаж температура <b>{val:.1f}°C</b> байгаа нь дундаж хэмжээнд байна.",
+            "density_high": "🐄 <b>Бэлчээрийн ачаалал өндөр:</b> Малын нягтрал <b>{val:.2f} толгой/га</b> байгаа нь бэлчээрийн даацаас хэтэрч байна.",
+            "density_ok": "🌱 <b>Бэлчээрийн ачаалал зохистой:</b> Малын нягтрал <b>{val:.2f} толгой/га</b> байгаа нь бэлчээрт ирэх дарамт бага байна.",
+            "loss_high": "⚠️ <b>Хорогдол өндөр:</b> Зүй бус хорогдол <b>{val:.0f} мянган толгой</b> байгаа нь мал сүргийн тогтвортой байдалд аюултай."
         },
-        "dataset_title": "📊 Загварт ашигласан Датасетийн Мэдээлэл (Dataset Information)",
-        "dataset_caption": "Хиймэл интеллектийн загварыг сургахад ашигласан цаг уур болон бэлчээрийн нэгдсэн өгөгдлийн бүтэц.",
-        "col_feature": "Үзүүлэлт (Feature)",
+        "dataset_title": "📊 Өгөгдлийн сангийн мэдээлэл ба тодорхойлолт",
+        "dataset_caption": "AI загварыг сургахад ашигласан цаг уур болон бэлчээрийн үзүүлэлтүүдийн бүтэц.",
+        "col_feature": "Үзүүлэлтийн нэр",
         "col_unit": "Хэмжих нэгж",
-        "col_role": "Үүрэг (Role)",
-        "col_desc": "Тайлагнал",
-        "sample_title": "🔍 Сургалтын өгөгдлийн бүтцийг харах (Sample Raw Data)",
-        "sample_caption": "Шууд өгөгдлийн эхний 5 байршлын түүвэр дээж харагдаж байна."
+        "col_role": "Үүрэг",
+        "col_desc": "Тайлбар",
+        "sample_title": "🔍 Сургалтын өгөгдлийн дээж харах (Sample Raw Data)",
+        "sample_caption": "Сургалтын эх өгөгдлийн зарим мөрүүдийг үзүүлж байна."
     },
     "English": {
         "sidebar_title": "Settings / Configuration",
@@ -125,8 +166,11 @@ translations = {
         "lbl_pasture": "Pasture Area (thousand ha):",
         "lbl_count": "Livestock Count (thousand head):",
         "lbl_loss": "Livestock Loss (thousand head):",
+        "upload_label": "📁 Upload Dataset File (CSV/XLSX):",
+        "export_btn": "📥 Export Prediction Report",
         "main_title": "Pasture Degradation Risk Prediction System",
         "main_subtitle": "Machine Learning Dashboard based on climate and livestock parameters.",
+        "ai_result_title": "AI Prediction Result",
         "nav_about": "🌿 COP-17 & About",
         "cop_modal_title": "COP-17 Ulaanbaatar 2026 & Platform Purpose",
         "cop_sub": "17th Conference of the Parties to the UNCCD",
@@ -185,10 +229,10 @@ translations = {
 }
 
 # ==========================================
-# 3. Sidebar (Тохиргоо)
+# 3. Sidebar (Тохиргоо ба Оруулах Үзүүлэлтүүд)
 # ==========================================
 st.sidebar.title("Settings / Тохиргоо")
-lang = st.sidebar.radio("Language / Хэл:", options=["Монгол", "English"], index=1)
+lang = st.sidebar.radio("Language / Хэл:", options=["Монгол", "English"], index=0)
 t = translations[lang]
 
 st.sidebar.markdown("---")
@@ -202,30 +246,48 @@ loss = st.sidebar.slider(t["lbl_loss"], 0.0, 2000.0, 120.0)
 
 calculated_density = count / pasture if pasture > 0 else 0.0
 
+st.sidebar.markdown("---")
+uploaded_file = st.sidebar.file_uploader(t["upload_label"], type=["csv", "xlsx"])
+
 # ==========================================
-# 4. Navigation Header (Дээд Навигаци ба POP-UP Модал)
+# 4. Navigation Header ба POP-UP Модал (Smooth Slide Effect)
 # ==========================================
 nav_col1, nav_col2 = st.columns([3, 1])
 
 with nav_col1:
-    st.markdown('<div class="nav-brand">🌱 Pasture Risk AI</div>', unsafe_allow_html=True)
+    st.markdown('<div class="nav-brand slide-right">🌱 Pasture Risk AI</div>', unsafe_allow_html=True)
 
 with nav_col2:
     if st.button(t["nav_about"], use_container_width=True):
         @st.dialog("🌿 COP-17 & About")
         def show_cop_info():
-            # Гарчгийг Sky Blue (#0284C7 эсвэл #38BDF8) болгож тохируулсан
-            st.markdown(f"<h3 style='color: #0284C7 !important;'>🌿 {t['cop_modal_title']}</h3>", unsafe_allow_html=True)
-            st.write(f"**{t['cop_sub']}**")
-            st.write(t['cop_loc'])
-            st.write(t['cop_date'])
+            st.markdown(f"""
+                <div class="slide-right">
+                    <h3 style='color: #0284C7 !important; font-weight: 800;'>🌿 {t['cop_modal_title']}</h3>
+                    <p style='color: #0369A1; font-weight: 600;'>{t['cop_sub']}</p>
+                    <p style='margin-bottom: 4px;'>{t['cop_loc']}</p>
+                    <p>{t['cop_date']}</p>
+                </div>
+            """, unsafe_allow_html=True)
+            
             st.markdown("---")
-            st.markdown(f"<h4 style='color: #0284C7 !important;'>{t['goal_title']}</h4>", unsafe_allow_html=True)
-            st.write(t['goal_desc'])
+            
+            st.markdown(f"""
+                <div class="slide-left" style="background-color: #E0F2FE; padding: 15px; border-radius: 10px; border-left: 4px solid #0284C7;">
+                    <h4 style='color: #0369A1 !important; font-weight: 700; margin-bottom: 8px;'>{t['goal_title']}</h4>
+                    <p style='color: #0C4A6E; line-height: 1.5; margin: 0;'>{t['goal_desc']}</p>
+                </div>
+            """, unsafe_allow_html=True)
+            
         show_cop_info()
 
-st.title(t["main_title"])
-st.caption(t["main_subtitle"])
+# Үндсэн гарчиг
+st.markdown(f"""
+    <div class="slide-left">
+        <h1 style="color: #0C4A6E; font-weight: 800; margin-bottom: 0px;">{t['main_title']}</h1>
+        <p style="color: #0369A1; font-size: 15px; margin-top: 4px;">{t['main_subtitle']}</p>
+    </div>
+""", unsafe_allow_html=True)
 st.write("")
 
 # ==========================================
@@ -252,36 +314,59 @@ with col4:
 st.markdown("---")
 
 # ==========================================
-# 6. AI Таамаглал ба ЭРСДЭЛИЙН КАРТ (2 дахь зураг шиг Light Card style)
+# 6. AI Таамаглал ба ЭРСДЭЛИЙН КАРТ
 # ==========================================
-if calculated_density > 1.2 or loss > 500 or precip < 120:
-    raw_risk = "HIGH"
+# Загвар унших эсвэл Rule-based fallback
+model_loaded = False
+if os.path.exists("model.pkl"):
+    try:
+        model = joblib.load("model.pkl")
+        input_data = pd.DataFrame([[precip, temp, pasture, count, loss, calculated_density]],
+                                  columns=['precipitation', 'temperature', 'pasture_area', 'livestock_count', 'livestock_loss', 'livestock_density'])
+        pred = model.predict(input_data)[0]
+        raw_risk = str(pred).upper()
+        
+        if hasattr(model, "predict_proba"):
+            probs = model.predict_proba(input_data)[0]
+            prob_high, prob_med, prob_low = int(probs[0]*100), int(probs[1]*100), int(probs[2]*100)
+        else:
+            prob_high, prob_med, prob_low = (70, 20, 10) if raw_risk == "HIGH" else ((20, 60, 20) if raw_risk == "MEDIUM" else (10, 20, 70))
+        model_loaded = True
+    except Exception:
+        model_loaded = False
+
+if not model_loaded:
+    if calculated_density > 1.2 or loss > 500 or precip < 120:
+        raw_risk = "HIGH"
+        prob_high, prob_med, prob_low = 65, 25, 10
+    elif calculated_density > 0.8 or loss > 200 or precip < 200:
+        raw_risk = "MEDIUM"
+        prob_high, prob_med, prob_low = 5, 57, 38
+    else:
+        raw_risk = "LOW"
+        prob_high, prob_med, prob_low = 2, 18, 80
+
+if raw_risk == "HIGH":
     risk_display_name = "HIGH" if lang == "English" else "ӨНДӨР"
-    current_color = "#D97706"
-    bg_card_color = "#FEF3C7" # Цайвар шар/улаан туяа
-    prob_high, prob_med, prob_low = 65, 25, 10
-elif calculated_density > 0.8 or loss > 200 or precip < 200:
-    raw_risk = "MEDIUM"
+    current_color = "#DC2626"
+    bg_card_color = "#FEE2E2"
+elif raw_risk == "MEDIUM":
     risk_display_name = "MEDIUM" if lang == "English" else "ДУНД"
     current_color = "#D97706"
     bg_card_color = "#FEF3C7"
-    prob_high, prob_med, prob_low = 5, 57, 38
 else:
-    raw_risk = "LOW"
     risk_display_name = "LOW" if lang == "English" else "БАГА"
     current_color = "#059669"
-    bg_card_color = "#DCFCE7" # 2 дахь зураг дээрх шиг зөөлөн цайвар ногоон арын фон
-    prob_high, prob_med, prob_low = 2, 18, 80
+    bg_card_color = "#DCFCE7"
 
 col_left, col_right = st.columns([1, 1])
 
 with col_left:
-    st.subheader("AI Prediction Result")
+    st.subheader(t["ai_result_title"])
     
-    # 2 дахь зурагтай ижилхэн дизайнтай карт
     st.markdown(f"""
         <div style="background-color: {bg_card_color}; padding: 18px 22px; border-radius: 12px; border-left: 6px solid {current_color}; margin-bottom: 20px;">
-            <span style="font-size: 13px; color: #166534; font-weight: 700;">{t['risk_level_label']}</span><br/>
+            <span style="font-size: 13px; color: #1E293B; font-weight: 700;">{t['risk_level_label']}</span><br/>
             <span style="font-size: 28px; color: {current_color}; font-weight: 800;">{risk_display_name} ({raw_risk})</span>
         </div>
     """, unsafe_allow_html=True)
@@ -337,22 +422,41 @@ with col_left:
     reasons_html = "".join([f"<li style='margin-bottom: 8px; line-height: 1.5;'>{r}</li>" for r in reasons])
 
     st.markdown(f"""
-        <div style="background-color: #F0FDF4; padding: 20px; border-radius: 14px; border: 1.5px solid #BBF7D0; margin-top: 10px;">
+        <div style="background-color: #E0F2FE; padding: 20px; border-radius: 14px; border: 1.5px solid #BAE6FD; margin-top: 10px;">
             <div style="font-weight: 800; font-size: 15px; color: {current_color}; margin-bottom: 8px;">
                 {summary_title}
             </div>
-            <p style="font-size: 13.5px; color: #166534; margin-bottom: 14px;">
+            <p style="font-size: 13.5px; color: #0C4A6E; margin-bottom: 14px;">
                 {summary_desc}
             </p>
-            <hr style="border: 0; border-top: 1px solid #BBF7D0; margin-bottom: 12px;"/>
-            <div style="font-size: 12px; color: #15803D; font-weight: 700; text-transform: uppercase; margin-bottom: 8px;">
+            <hr style="border: 0; border-top: 1px solid #BAE6FD; margin-bottom: 12px;"/>
+            <div style="font-size: 12px; color: #0369A1; font-weight: 700; text-transform: uppercase; margin-bottom: 8px;">
                 {t['analysis_header']}
             </div>
-            <ul style="font-size: 13px; color: #166534; margin-left: -10px; margin-bottom: 0px; padding-left: 20px;">
+            <ul style="font-size: 13px; color: #0C4A6E; margin-left: -10px; margin-bottom: 0px; padding-left: 20px;">
                 {reasons_html}
             </ul>
         </div>
     """, unsafe_allow_html=True)
+
+    # Тайлан татах хэсэг
+    export_df = pd.DataFrame([{
+        "Precipitation_mm": precip,
+        "Temperature_C": temp,
+        "Pasture_Area_k_ha": pasture,
+        "Livestock_Count_k_head": count,
+        "Livestock_Loss_k_head": loss,
+        "Livestock_Density_head_ha": calculated_density,
+        "Predicted_Risk_Level": raw_risk
+    }])
+    csv_data = export_df.to_csv(index=False).encode('utf-8')
+    st.write("")
+    st.download_button(
+        label=t["export_btn"],
+        data=csv_data,
+        file_name="pasture_risk_prediction_report.csv",
+        mime="text/csv"
+    )
 
 with col_right:
     st.subheader(t["radar_title"])
@@ -362,8 +466,8 @@ with col_right:
         r=[count/10000, precip/600, (temp+30)/75, loss/2000, calculated_density/3],
         theta=t["categories"],
         fill='toself',
-        fillcolor='rgba(16, 185, 129, 0.25)',
-        line=dict(color='#10B981', width=2)
+        fillcolor='rgba(2, 132, 199, 0.25)',
+        line=dict(color='#0284C7', width=2)
     ))
     fig_radar.update_layout(
         polar=dict(
@@ -396,7 +500,7 @@ fig_importance = go.Figure(go.Bar(
     x=importance_data['Importance'],
     y=importance_data['Feature_Name'],
     orientation='h',
-    marker=dict(color='#10B981')
+    marker=dict(color='#0284C7')
 ))
 fig_importance.update_layout(
     xaxis_title="Importance (%)",
@@ -409,7 +513,7 @@ fig_importance.update_layout(
 st.plotly_chart(fig_importance, use_container_width=True)
 
 # ==========================================
-# 8 & 9. Dataset Information (Expander)
+# 8 & 9. Dataset Information & Custom File Preview (Expander)
 # ==========================================
 st.markdown("---")
 
@@ -459,15 +563,25 @@ with st.expander(t["dataset_title"], expanded=False):
     st.write("")
 
     with st.expander(t["sample_title"]):
-        sample_display = pd.DataFrame({
-            "precipitation": [280.0, 150.5, 420.0, 90.0, 310.0],
-            "temperature": [2.5, 32.0, -15.0, 18.0, 5.0],
-            "pasture_area": [3000.0, 1500.0, 5000.0, 800.0, 2500.0],
-            "livestock_count": [1500.0, 2200.0, 1100.0, 3000.0, 1200.0],
-            "livestock_loss": [50.0, 450.0, 20.0, 800.0, 30.0],
-            "livestock_density": [0.50, 1.46, 0.22, 3.75, 0.48],
-            "risk_level": ["LOW", "HIGH", "LOW", "HIGH", "LOW"]
-        })
-        
-        st.dataframe(sample_display, use_container_width=True, hide_index=True)
-        st.caption(t["sample_caption"])
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith(".csv"):
+                    user_data = pd.read_csv(uploaded_file)
+                else:
+                    user_data = pd.read_excel(uploaded_file)
+                st.write("📋 **Оруулсан файлын дата:**")
+                st.dataframe(user_data.head(), use_container_width=True)
+            except Exception as e:
+                st.error(f"Файл уншихад алдаа гарлаа: {e}")
+        else:
+            sample_display = pd.DataFrame({
+                "precipitation": [280.0, 150.5, 420.0, 90.0, 310.0],
+                "temperature": [2.5, 32.0, -15.0, 18.0, 5.0],
+                "pasture_area": [3000.0, 1500.0, 5000.0, 800.0, 2500.0],
+                "livestock_count": [1500.0, 2200.0, 1100.0, 3000.0, 1200.0],
+                "livestock_loss": [50.0, 450.0, 20.0, 800.0, 30.0],
+                "livestock_density": [0.50, 1.46, 0.22, 3.75, 0.48],
+                "risk_level": ["LOW", "HIGH", "LOW", "HIGH", "LOW"]
+            })
+            st.dataframe(sample_display, use_container_width=True, hide_index=True)
+            st.caption(t["sample_caption"])
